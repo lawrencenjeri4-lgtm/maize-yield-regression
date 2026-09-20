@@ -69,6 +69,15 @@ def main():
 
     models = {"Rainfall only": m1}
 
+    # Model 1b: rainfall + county effects (runs whenever there are several counties).
+    # County effects absorb fixed differences such as soil, altitude and farming system,
+    # so the rainfall coefficient reflects year-to-year changes within each county.
+    if df["county"].nunique() > 1:
+        d1 = df.dropna(subset=["rainfall_mm"])
+        m1b = smf.ols("yield_kg_per_acre ~ rainfall_mm + C(county)", data=d1).fit()
+        summarise("Model 1b: yield ~ rainfall + county effects", m1b)
+        models["Rainfall + county effects"] = m1b
+
     # Model 2: rainfall + fertilizer (if available)
     if "fertilizer_kg_per_acre" in df.columns and df["fertilizer_kg_per_acre"].notna().sum() > 10:
         d2 = df.dropna(subset=["rainfall_mm", "fertilizer_kg_per_acre"])

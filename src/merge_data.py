@@ -2,7 +2,9 @@
 Merge maize yield data with the seasonal rainfall table.
 
 Usage (from the repo root):
-    python src/merge_data.py
+    python src/merge_data.py                                   # data/raw/yield_data.csv
+    python src/merge_data.py data/raw/yield_data_county.csv data/processed/maize_data_county.csv
+    python src/merge_data.py data/raw/yield_data_national.csv data/processed/maize_data_national.csv
 
 Inputs:
     data/raw/yield_data.csv               YOU fill this in from KNBS / Ministry reports
@@ -18,11 +20,14 @@ average of your sampled counties. That is a rough proxy, so say so in your READM
 Output:
     data/processed/maize_data.csv   ready for src/maize_yield_regression.py
 """
+import sys
+
 import pandas as pd
 
-YIELD_FILE = "data/raw/yield_data.csv"
+# Optional arguments: yield file, then output file
+YIELD_FILE = sys.argv[1] if len(sys.argv) > 1 else "data/raw/yield_data.csv"
 RAIN_FILE = "data/processed/rainfall_seasonal.csv"
-OUT_FILE = "data/processed/maize_data.csv"
+OUT_FILE = sys.argv[2] if len(sys.argv) > 2 else "data/processed/maize_data.csv"
 
 BAG_KG = 90          # one bag of maize = 90 kg
 ACRES_PER_HA = 2.471
