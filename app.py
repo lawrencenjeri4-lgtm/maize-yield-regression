@@ -315,7 +315,8 @@ with tab_price:
             },
         )
         st.caption("p-values are clustered by growing season, so they allow for months in the same season "
-                   "moving together. A Durbin-Watson value far below 2 means neighbouring months are strongly related.")
+                   "moving together. A Durbin-Watson value far below 2 means neighbouring months are strongly related. "
+                   "AIC can only be compared between models with the same n.")
 
         rain_coef, rain_p = best_price["rain_coef"], best_price["rain_p"]
         st.markdown(

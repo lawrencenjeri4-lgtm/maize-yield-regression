@@ -2,8 +2,11 @@
 Build a monthly national dataset for the maize price model.
 
 Usage (from the repo root):
-    python src/build_price_data.py
-    python src/build_price_data.py --commodity "Maize (white)"     # choose the maize commodity yourself
+    python src/build_price_data.py                          # default: all maize variants combined
+    python src/build_price_data.py --list-markets           # show which markets have maize prices, then stop
+    python src/build_price_data.py --min-months 36          # accept markets with fewer months of data
+    python src/build_price_data.py --markets "Eldoret,Kitale,Nakuru"   # choose the markets yourself
+    python src/build_price_data.py --commodity "Maize (white)"         # use one maize commodity only
 
 Inputs:
     data/raw/wfp_food_prices_ken.csv    from: python src/download_prices.py
@@ -15,13 +18,15 @@ Output:
         season_rain_mm, n_markets
 
 How the columns are made:
-- maize price: average retail price across markets that report often enough (KES per kg).
+- maize price: average retail price across the chosen markets (KES per kg). By default all maize
+  labels ("Maize", "Maize (white)", "Maize (white, dry)") are combined, since they are the same grain
+  recorded under different names.
 - fuel price: average diesel price across markets (or other fuel if no diesel), KES per litre.
 - season_rain_mm: March-August rainfall of the most recent completed growing season
   (average of the sampled counties). A price in September to December of year Y uses the
   season of year Y, and a price in January to August of year Y+1 also uses the season of year Y.
 """
-import sys
+import argparse
 
 import numpy as np
 import pandas as pd
@@ -31,8 +36,8 @@ RAIN = "data/raw/nasa_power_monthly.csv"
 OUT = "data/processed/maize_price_monthly.csv"
 
 START, END = "2010-01", "2024-12"   # NASA POWER file covers 2010-2024
-MIN_MONTHS = 60                     # markets reporting fewer months than this are dropped
 SEASON_MONTHS = [3, 4, 5, 6, 7, 8]  # must match download_rainfall.py
+EXCLUDE = "flour|meal|bran|green|seed"
 
 
 def load_prices():
@@ -45,20 +50,20 @@ def load_prices():
     return df[(df["ym"] >= START) & (df["ym"] <= END)]
 
 
-def pick_maize(df, forced=None):
+def pick_maize(df, commodity=None):
     com = df["commodity"].astype(str)
-    if forced:
-        rows = df[com.str.lower().str.strip() == forced.lower().strip()]
+    if commodity:
+        rows = df[com.str.lower().str.strip() == commodity.lower().strip()]
         if rows.empty:
-            raise SystemExit(f"No rows for commodity '{forced}'. Run download_prices.py to see the names.")
-        return rows, forced
-    cand = df[com.str.contains("maize", case=False) & ~com.str.contains("flour|meal|bran|green|seed", case=False)]
-    if cand.empty:
+            raise SystemExit(f"No rows for commodity '{commodity}'. Run download_prices.py to see the names.")
+        print(f"Maize commodity used: '{commodity}' ({len(rows):,} rows)")
+        return rows
+    rows = df[com.str.contains("maize", case=False) & ~com.str.contains(EXCLUDE, case=False)]
+    if rows.empty:
         raise SystemExit("No maize commodity found. Run python src/download_prices.py to see the names.")
-    counts = cand["commodity"].value_counts()
-    name = counts.index[0]
-    print(f"Maize commodity used: '{name}' ({counts.iloc[0]:,} rows). Others: {list(counts.index[1:])}")
-    return cand[cand["commodity"] == name], name
+    counts = rows["commodity"].value_counts()
+    print("Maize commodities combined: " + ", ".join(f"'{k}' ({v:,} rows)" for k, v in counts.items()))
+    return rows
 
 
 def clean_maize(rows):
@@ -72,17 +77,27 @@ def clean_maize(rows):
     return rows
 
 
-def monthly_price(rows):
+def market_coverage(rows):
     per_market = rows.groupby(["market", "ym"])["price"].mean().reset_index()
-    months_per_market = per_market.groupby("market")["ym"].nunique().sort_values(ascending=False)
-    keep = months_per_market[months_per_market >= MIN_MONTHS].index
-    if len(keep) < 3:
-        keep = months_per_market.index[:5]
-        print(f"Few markets reach {MIN_MONTHS} months, using the {len(keep)} best-covered markets instead.")
+    cov = per_market.groupby("market")["ym"].agg(months="nunique", first="min", last="max")
+    return per_market, cov.sort_values("months", ascending=False)
+
+
+def monthly_price(rows, min_months, chosen):
+    per_market, cov = market_coverage(rows)
+    if chosen:
+        wanted = [m.strip().lower() for m in chosen.split(",")]
+        keep = [m for m in cov.index if str(m).lower() in wanted]
+        if not keep:
+            raise SystemExit("None of those markets have maize prices. Run with --list-markets to see the names.")
+    else:
+        keep = list(cov[cov["months"] >= min_months].index)
+        if len(keep) < 3:
+            keep = list(cov.index[:5])
+            print(f"Few markets reach {min_months} months, using the {len(keep)} best-covered markets instead.")
     print(f"Markets used ({len(keep)}): {', '.join(map(str, keep))}")
     kept = per_market[per_market["market"].isin(keep)]
-    out = kept.groupby("ym").agg(maize_price_kes_per_kg=("price", "mean"), n_markets=("market", "nunique"))
-    return out
+    return kept.groupby("ym").agg(maize_price_kes_per_kg=("price", "mean"), n_markets=("market", "nunique"))
 
 
 def monthly_fuel(df):
@@ -97,7 +112,8 @@ def monthly_fuel(df):
         return pd.Series(dtype=float, name="fuel_price_kes_per_litre")
     if "currency" in fuel.columns and (fuel["currency"] == "KES").any():
         fuel = fuel[fuel["currency"] == "KES"]
-    print(f"Fuel series: {label} ({sorted(fuel['commodity'].unique())}), {fuel['ym'].nunique()} months")
+    print(f"Fuel series: {label} ({sorted(fuel['commodity'].unique())}), {fuel['ym'].nunique()} months, "
+          f"{fuel['ym'].min()} to {fuel['ym'].max()}")
     return fuel.groupby("ym")["price"].mean().rename("fuel_price_kes_per_litre")
 
 
@@ -112,10 +128,25 @@ def season_rainfall():
 
 
 def main():
-    forced = sys.argv[sys.argv.index("--commodity") + 1] if "--commodity" in sys.argv else None
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--commodity", help="use only this maize commodity name")
+    ap.add_argument("--min-months", type=int, default=60, help="minimum months of data per market (default 60)")
+    ap.add_argument("--markets", help="comma-separated market names to use")
+    ap.add_argument("--list-markets", action="store_true", help="list markets with maize prices and stop")
+    args = ap.parse_args()
+
     df = load_prices()
-    maize_rows, _ = pick_maize(df, forced)
-    price = monthly_price(clean_maize(maize_rows))
+    rows = clean_maize(pick_maize(df, args.commodity))
+
+    if args.list_markets:
+        _, cov = market_coverage(rows)
+        cov = cov.reset_index()
+        cov["first"], cov["last"] = cov["first"].astype(str), cov["last"].astype(str)
+        print(f"\nMarkets with maize prices ({len(cov)}):")
+        print(cov.to_string(index=False))
+        return
+
+    price = monthly_price(rows, args.min_months, args.markets)
     fuel = monthly_fuel(df)
     rain_by_year = season_rainfall()
 

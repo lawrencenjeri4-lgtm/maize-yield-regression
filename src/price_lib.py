@@ -12,9 +12,11 @@ Outputs:
     outputs/price_over_time.png      actual price and the best model's fitted values
 
 Models (price in KES per kg):
-    1. price ~ rainfall in the last growing season
-    2. price ~ rainfall + fuel price
-    3. price ~ rainfall + fuel price + month-of-year effects
+    1. price ~ rainfall in the last growing season            (all months with a price)
+    2. price ~ rainfall + month-of-year effects              (all months with a price)
+    3. price ~ rainfall + fuel price                          (months that also have a fuel price)
+    4. price ~ rainfall + fuel price + month-of-year effects (same months as model 3)
+AIC can only be compared between models with the same number of months.
 
 Prices in the same season move together, so standard errors and p-values are
 clustered by growing season (about 14 independent groups). That is why the
@@ -81,18 +83,22 @@ def _design(df, use_fuel, use_month):
 
 
 def fit_price_models(df):
-    """Fit the price models on one common sample. Returns a list of dicts."""
-    has_fuel = df["fuel_price_kes_per_litre"].notna().sum() > 24
-    d = df.dropna(subset=["maize_price_kes_per_kg", "season_rain_mm"] +
-                  (["fuel_price_kes_per_litre"] if has_fuel else [])).reset_index(drop=True)
-    specs = [("1. Rainfall only", False, False)]
+    """Fit the price models. Returns a list of dicts.
+
+    Models 1 and 2 use every month that has a price. The fuel models use only the months
+    that also have a fuel price, so their n is smaller.
+    """
+    base = df.dropna(subset=["maize_price_kes_per_kg", "season_rain_mm"]).reset_index(drop=True)
+    has_fuel = base["fuel_price_kes_per_litre"].notna().sum() > 24
+    specs = [("1. Rainfall only", base, False, False),
+             ("2. Rainfall + month", base, False, True)]
     if has_fuel:
-        specs += [("2. Rainfall + fuel price", True, False), ("3. Rainfall + fuel + month", True, True)]
-    else:
-        specs += [("2. Rainfall + month", False, True)]
+        fuel_sample = base.dropna(subset=["fuel_price_kes_per_litre"]).reset_index(drop=True)
+        specs += [("3. Rainfall + fuel price", fuel_sample, True, False),
+                  ("4. Rainfall + fuel + month", fuel_sample, True, True)]
 
     results = []
-    for name, use_fuel, use_month in specs:
+    for name, d, use_fuel, use_month in specs:
         X, names = _design(d, use_fuel, use_month)
         res = ols_cluster(X, d["maize_price_kes_per_kg"], d["season"])
         res.update({"name": name, "names": names, "data": d})
@@ -148,6 +154,7 @@ def main():
     print(table.round(3).to_string(index=False))
     print("\nDurbin-Watson well below 2 means neighbouring months are strongly related "
           "(hence clustered standard errors).")
+    print("AIC can only be compared between models with the same n.")
 
     Path("outputs").mkdir(exist_ok=True)
     table.to_csv("outputs/price_results.csv", index=False)
